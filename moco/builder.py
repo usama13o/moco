@@ -41,10 +41,25 @@ class MoCo(nn.Module):
             param_k.requires_grad = False  # not update by gradient
 
         # create the queue
-        self.register_buffer("queue", torch.randn(dim, K))
-        self.queue = nn.functional.normalize(self.queue, dim=0)
+        # Creating different queues for the clusters 
+        self.register_buffer("queue_1", torch.randn(dim, K))
+        self.queue_1 = nn.functional.normalize(self.queue_1, dim=0)
+        self.register_buffer("queue_1_ptr", torch.zeros(1, dtype=torch.long))
 
-        self.register_buffer("queue_ptr", torch.zeros(1, dtype=torch.long))
+        self.register_buffer("queue_2", torch.randn(dim, K))
+        self.queue_2 = nn.functional.normalize(self.queue_2, dim=0)
+        self.register_buffer("queue_2_ptr", torch.zeros(1, dtype=torch.long))
+
+        self.register_buffer("queue_3", torch.randn(dim, K))
+        self.queue_3 = nn.functional.normalize(self.queue_3 ,dim=0)
+        self.register_buffer("queue_3_ptr", torch.zeros(1, dtype=torch.long))
+
+        self.register_buffer("queue_4", torch.randn(dim, K))
+        self.queue_4 = nn.functional.normalize(self.queue_4, dim=0)
+        self.register_buffer("queue_4_ptr", torch.zeros(1, dtype=torch.long))
+
+        self.queues = torch.stack([self.queue_1,self.queue_2,self.queue_3,self.queue_4],dim=0)
+        self.queues_ptr = torch.stack([self.queue_1_ptr,self.queue_2_ptr,self.queue_3_ptr,self.queue_4_ptr],dim=0)
 
     @torch.no_grad()
     def _momentum_update_key_encoder(self):
@@ -55,20 +70,22 @@ class MoCo(nn.Module):
             param_k.data = param_k.data * self.m + param_q.data * (1. - self.m)
 
     @torch.no_grad()
-    def _dequeue_and_enqueue(self, keys):
+    def _dequeue_and_enqueue(self, keys,label):
         # gather keys before updating queue
         # keys = concat_all_gather(keys)
+        queue = self.queues[label]
+        queue_ptr = self.queues_ptr[label]
 
         batch_size = keys.shape[0]
 
-        ptr = int(self.queue_ptr)
+        ptr = int(queue_ptr)
         assert self.K % batch_size == 0  # for simplicity
 
         # replace the keys at ptr (dequeue and enqueue)
-        self.queue[:, ptr:ptr + batch_size] = keys.T
+        queue[:, ptr:ptr + batch_size] = keys.T
         ptr = (ptr + batch_size) % self.K  # move pointer
 
-        self.queue_ptr[0] = ptr
+        queue_ptr[0] = ptr
 
     @torch.no_grad()
     def _batch_shuffle_ddp(self, x):
@@ -117,7 +134,7 @@ class MoCo(nn.Module):
 
         return x_gather[idx_this]
 
-    def forward(self, im_q, im_k):
+    def forward(self, im_q, im_k,label):
         """
         Input:
             im_q: a batch of query images
@@ -160,7 +177,7 @@ class MoCo(nn.Module):
         labels = torch.zeros(logits.shape[0], dtype=torch.long).cuda()
 
         # dequeue and enqueue
-        self._dequeue_and_enqueue(k)
+        self._dequeue_and_enqueue(k,label)
 
         return logits, labels
 

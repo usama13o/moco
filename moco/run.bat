@@ -1,0 +1,1 @@
+python C:\Users\Usama\Downloads\moco\main_moco.py F:Data\test -j 16 --gpu 0 --aug-plus --mlp --cos -b 128 --moco-k 1024 --resume C:\Users\Usama\checkpoint_0094.pth.tar

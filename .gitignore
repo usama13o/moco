@@ -2,3 +2,5 @@
 *.pth
 *.pyc
 *.pkl
+*.png
+/saved_models

@@ -73,19 +73,22 @@ class MoCo(nn.Module):
     def _dequeue_and_enqueue(self, keys,label):
         # gather keys before updating queue
         # keys = concat_all_gather(keys)
-        queue = self.queues[label]
-        queue_ptr = self.queues_ptr[label]
+        for idx,k in enumerate(keys):
+            self.queues[label[idx]][:,int(self.queues_ptr[label[idx]]) + 1] = k
+            self.queues_ptr[label[idx]] = (self.queues_ptr[label[idx]] + 1) % self.K
+        # queue = self.queues[label]
+        # queue_ptr = self.queues_ptr[label]
 
-        batch_size = keys.shape[0]
+        # batch_size = keys.shape[0]
 
-        ptr = int(queue_ptr)
-        assert self.K % batch_size == 0  # for simplicity
+        # ptr = int(queue_ptr)
+        # assert self.K % batch_size == 0  # for simplicity
 
-        # replace the keys at ptr (dequeue and enqueue)
-        queue[:, ptr:ptr + batch_size] = keys.T
-        ptr = (ptr + batch_size) % self.K  # move pointer
+        # # replace the keys at ptr (dequeue and enqueue)
+        # queue[:, ptr:ptr + batch_size] = keys.T
+        # ptr = (ptr + batch_size) % self.K  # move pointer
 
-        queue_ptr[0] = ptr
+        # queue_ptr[0] = ptr
 
     @torch.no_grad()
     def _batch_shuffle_ddp(self, x):
@@ -165,7 +168,16 @@ class MoCo(nn.Module):
         # positive logits: Nx1
         l_pos = torch.einsum('nc,nc->n', [q, k]).unsqueeze(-1)
         # negative logits: NxK
-        l_neg = torch.einsum('nc,ck->nk', [q, self.queue.clone().detach()])
+        l_neg = torch.Tensor((q.shape[0]),self.queues[0].shape[1])
+        for idx,n in enumerate(q):
+            te = n.unsqueeze(0)
+            idx_other = (label[idx]-1)%4
+            # print(label[idx],' to ',idx_other)
+            qq = self.queues[idx_other].clone().detach()
+            l_p= torch.einsum('nc,ck->nk',[te,qq])
+            # print(l_p.shape)
+            l_neg[idx]=l_p
+            # print(l_neg.shape)
 
         # logits: Nx(1+K)
         logits = torch.cat([l_pos, l_neg], dim=1)
@@ -174,7 +186,10 @@ class MoCo(nn.Module):
         logits /= self.T
 
         # labels: positive key indicators
-        labels = torch.zeros(logits.shape[0], dtype=torch.long).cuda()
+        try:
+            labels = torch.zeros(logits.shape[0], dtype=torch.long).cuda()
+        except:
+            labels = torch.zeros(logits.shape[0], dtype=torch.long)
 
         # dequeue and enqueue
         self._dequeue_and_enqueue(k,label)

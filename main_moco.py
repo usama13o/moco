@@ -189,10 +189,13 @@ def main_worker(gpu, ngpus_per_node, args):
     else:
         # AllGather implementation (batch shuffle, queue update, etc.) in
         # this code only supports DistributedDataParallel.
-        raise NotImplementedError("Only DistributedDataParallel is supported.")
-
+        print('Debugging using the CPU')
     # define loss function (criterion) and optimizer
-    criterion = nn.CrossEntropyLoss().cuda(args.gpu)
+    try:
+        criterion = nn.CrossEntropyLoss().cuda(args.gpu)
+    except :
+        criterion = nn.CrossEntropyLoss()
+
 
     optimizer = torch.optim.SGD(model.parameters(), args.lr,
                                 momentum=args.momentum,
@@ -249,6 +252,16 @@ def main_worker(gpu, ngpus_per_node, args):
             # normalize
         ]
 
+    #Run AutoEncoder
+    '''
+    Cluster images and save them into seperate folders. The data loader will load them as seperate classes 
+    TODO maybe make more 'on the fly' by passing the kmeans fitted func to the dataset loader ? 
+    '''
+    if not(os.path.exists(os.path.join(traindir,'_0'))):
+        import emb
+    else:
+        print('clustering already Done !')
+
     train_dataset = datasets.ImageFolder(
         traindir,
         moco.loader.TwoCropsTransform(transforms.Compose(augmentation)))
@@ -295,7 +308,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
     model.train()
 
     end = time.time()
-    for i, (images, _) in enumerate(train_loader):
+    for i, (images, lab) in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
 
@@ -304,7 +317,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
             images[1] = images[1].cuda(args.gpu, non_blocking=True)
 
         # compute output
-        output, target = model(im_q=images[0], im_k=images[1],images[2])
+        output, target = model(im_q=images[0], im_k=images[1],label=lab)
         loss = criterion(output, target)
 
         # acc1/acc5 are (K+1)-way contrast classifier accuracy

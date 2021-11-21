@@ -75,8 +75,9 @@ class MoCo(nn.Module):
         # keys = concat_all_gather(keys)
         for idx,k in enumerate(keys):
             # print(self.queues[label[idx]][:,int(self.queues_ptr[label[idx]]):int(self.queues_ptr[label[idx]]) +1 ].shape,k.shape)
-            self.queues[label[idx]][:,int(self.queues_ptr[label[idx]]):int(self.queues_ptr[label[idx]]) ] = k.T.unsqueeze(1)
+            self.queues[label[idx]][:,int(self.queues_ptr[label[idx]])] = k.T
             self.queues_ptr[label[idx]] = (self.queues_ptr[label[idx]] + 1) % self.K
+            # print(self.queues_ptr)
         # queue = self.queues[label]
         # queue_ptr = self.queues_ptr[label]
 

@@ -26,6 +26,8 @@ import moco.loader
 import moco.builder
 from moco.swin_transformer import SwinTransformer
 
+from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
+import pytorch_lightning as pl
 
 model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
@@ -261,6 +263,8 @@ def main_worker(gpu, ngpus_per_node, args):
         import emb
     else:
         print('clustering already Done !')
+    
+    traindir = os.path.join(args.data, 'train\\cls2')
 
     train_dataset = datasets.ImageFolder(
         traindir,

@@ -158,10 +158,15 @@ def main_worker(gpu, ngpus_per_node, args):
             args.rank = args.rank * ngpus_per_node + gpu
         dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
                                 world_size=args.world_size, rank=args.rank)
-    # create model
+ # define loss function (criterion) and optimizer
+    try:
+        criterion = nn.CrossEntropyLoss().cuda(args.gpu)
+    except :
+        criterion = nn.CrossEntropyLoss()
+
     print("=> creating model '{}'".format(args.arch))
     swin =  SwinTransformer
-    model =  moco.builder.MoCo(swin,
+    model =  moco.builder.MoCo(swin,criterion,
         args.moco_dim, args.moco_k, args.moco_m, args.moco_t, args.mlp)
     print(model)
 
@@ -310,6 +315,21 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
 
     # switch to train mode
     model.train()
+    device = torch.device(
+    "cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+
+    trainer = pl.Trainer(default_root_dir=os.path.join('./moco_saved', f"mod_moco_"),
+                         gpus=1 if str(device).startswith("cuda") else 0,
+                         max_epochs=500,
+                         callbacks=[ModelCheckpoint(save_weights_only=True),
+                                    LearningRateMonitor("epoch")])
+    # If True, we plot the computation graph in tensorboard
+    trainer.logger._log_graph = True
+    # Optional logging argument that we don't need
+    trainer.logger._default_hp_metric = None
+
+    # Check whether pretrained model exists. If yes, load it and skip training
+    trainer.fit(model, train_loader)
 
     end = time.time()
     for i, (images, lab) in enumerate(train_loader):

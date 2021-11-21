@@ -1,22 +1,24 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import torch
 import torch.nn as nn
+import pytorch_lightning as pl
+import torch.optim as optim
 
-
-class MoCo(nn.Module):
+class MoCo(pl.LightningModule):
     """
     Build a MoCo model with: a query encoder, a key encoder, and a queue
     https://arxiv.org/abs/1911.05722
     """
-    def __init__(self, base_encoder, dim=128, K=65536, m=0.999, T=0.07, mlp=False):
+    def __init__(self, base_encoder,criterion, dim=128, K=65536, m=0.999, T=0.07, mlp=False):
         """
         dim: feature dimension (default: 128)
         K: queue size; number of negative keys (default: 65536)
         m: moco momentum of updating key encoder (default: 0.999)
         T: softmax temperature (default: 0.07)
         """
-        super(MoCo, self).__init__()
-
+        super().__init__()
+        self.save_hyperparameters()
+        self.criterion=criterion
         self.K = K
         self.m = m
         self.T = T
@@ -198,6 +200,37 @@ class MoCo(nn.Module):
 
         return logits, labels
 
+    def _get_reconstruction_loss(self, batch):
+        """
+        Given a batch of images, this function returns the reconstruction loss (MSE in our case)
+        """
+        images,label = batch  #
+        o,t= self.forward(images[0], images[1],label)
+        loss = self.criterion(o,t)
+        return loss
+
+    def training_step(self, batch, batch_idx):
+        loss = self._get_reconstruction_loss(batch)
+        self.log('train_loss', loss)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        loss = self._get_reconstruction_loss(batch)
+        self.log('val_loss', loss)
+
+    def test_step(self, batch, batch_idx):
+        loss = self._get_reconstruction_loss(batch)
+        self.log('test_loss', loss)
+    def configure_optimizers(self):
+        optimizer = optim.Adam(self.parameters(), lr=1e-3)
+        # Using a scheduler is optional but can be helpful.
+        # The scheduler reduces the LR if the validation performance hasn't improved for the last N epochs
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer,
+                                                         mode='min',
+                                                         factor=0.2,
+                                                         patience=20,
+                                                         min_lr=5e-5)
+        return {"optimizer": optimizer, "lr_scheduler": scheduler, "monitor": "val_loss"}
 
 # utils
 @torch.no_grad()

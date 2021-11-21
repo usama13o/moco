@@ -31,7 +31,7 @@ class glas_dataset(data.Dataset):
         super(glas_dataset, self).__init__()
         img_dir= root_dir
         # targets are a comob of two dirs 1- normal 1024 patches 2- Tum 1024
-        self.image_filenames  = sorted(glob(img_dir+'/*'))
+        self.image_filenames  = sorted(glob(img_dir+'\\*.png'))
         #filter the iamges with a different size than the required one 
         # self.image_filenames = self.filter_size(test_size,self.image_filenames)
         
@@ -41,7 +41,7 @@ class glas_dataset(data.Dataset):
         if split == 'train':
             self.image_filenames = self.image_filenames[:sp]
         
-        if split == 'all':
+        elif split == 'all':
             self.image_filenames= self.image_filenames
         else:
             self.image_filenames = self.image_filenames[sp:]

@@ -257,7 +257,7 @@ def main_worker(gpu, ngpus_per_node, args):
     Cluster images and save them into seperate folders. The data loader will load them as seperate classes 
     TODO maybe make more 'on the fly' by passing the kmeans fitted func to the dataset loader ? 
     '''
-    if not(os.path.exists(os.path.join(traindir,'_0'))):
+    if not(os.path.exists(os.path.join(traindir,'cls2\\_0'))):
         import emb
     else:
         print('clustering already Done !')

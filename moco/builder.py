@@ -74,7 +74,8 @@ class MoCo(nn.Module):
         # gather keys before updating queue
         # keys = concat_all_gather(keys)
         for idx,k in enumerate(keys):
-            self.queues[label[idx]][:,int(self.queues_ptr[label[idx]]) + 1] = k
+            # print(self.queues[label[idx]][:,int(self.queues_ptr[label[idx]]):int(self.queues_ptr[label[idx]]) +1 ].shape,k.shape)
+            self.queues[label[idx]][:,int(self.queues_ptr[label[idx]]):int(self.queues_ptr[label[idx]]) ] = k.T.unsqueeze(1)
             self.queues_ptr[label[idx]] = (self.queues_ptr[label[idx]] + 1) % self.K
         # queue = self.queues[label]
         # queue_ptr = self.queues_ptr[label]
@@ -168,13 +169,13 @@ class MoCo(nn.Module):
         # positive logits: Nx1
         l_pos = torch.einsum('nc,nc->n', [q, k]).unsqueeze(-1)
         # negative logits: NxK
-        l_neg = torch.Tensor((q.shape[0]),self.queues[0].shape[1])
+        l_neg = torch.Tensor((q.shape[0]),self.queues[0].shape[1]).cuda()
         for idx,n in enumerate(q):
             te = n.unsqueeze(0)
             idx_other = (label[idx]-1)%4
             # print(label[idx],' to ',idx_other)
             qq = self.queues[idx_other].clone().detach()
-            l_p= torch.einsum('nc,ck->nk',[te,qq])
+            l_p= torch.einsum('nc,ck->nk',[te.cuda(),qq.cuda()]).cuda()
             # print(l_p.shape)
             l_neg[idx]=l_p
             # print(l_neg.shape)

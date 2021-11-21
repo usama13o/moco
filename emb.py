@@ -53,8 +53,7 @@ except ModuleNotFoundError:  # Google Colab does not have PyTorch Lightning inst
 # Tensorboard extension (for visualization purposes later)
 
 # Path to the folder where the datasets are/should be downloaded (e.g. CIFAR10)
-DATASET_PATH = "/mnt/data/Other/DOWNLOADS/WSIData/filtered/PNG/train/"
-# DATASET_PATH = "F:\\Data\\slices (3)\\slices\\0"
+DATASET_PATH = "F:\\Data\\test\\train\\cls2"
 # DATASET_PATH = r"/mnt/data/Other/DOWNLOADS/slices (4)/slices/"
 # Path to the folder where the pretrained models are saved
 CHECKPOINT_PATH = "./saved_models/"
@@ -138,7 +137,7 @@ valid_dataset = glas_dataset(
     root_dir=DATASET_PATH, split='valid', transform=transform)
 
 # We define a set of data loaders that we can use for various purposes later.
-train_loader = data.DataLoader(train_dataset, batch_size=6,
+train_loader = data.DataLoader(train_dataset, batch_size=64,
                                shuffle=False, drop_last=True, pin_memory=False, num_workers=4)
 val_loader = data.DataLoader(
     valid_dataset, batch_size=6, shuffle=False, drop_last=False, num_workers=4)
@@ -149,7 +148,7 @@ def get_train_images(num):
 
 
 # Check whether pretrained model exists. If yes, load it and skip training
-pretrained_filename = r"/mnt/data/Other/DOWNLOADS/epoch=499-step=48499.ckpt"
+pretrained_filename = r"saved_models\glass_256\lightning_logs\version_0\checkpoints\epoch=499-step=48499.ckpt"
 model = Autoencoder(base_channel_size=128, latent_dim=128,
                     width=IMG_SIZE, height=IMG_SIZE)
 model = Autoencoder.load_from_checkpoint(pretrained_filename)
@@ -172,8 +171,7 @@ def embed_imgs(model, data_loader):
         img_list.append(imgs)
 
         embed_list.append(z)
-        if max >= 1000:
-            return (torch.cat(img_list, dim=0), torch.cat(embed_list, dim=0))
+        
     return (torch.cat(img_list, dim=0), torch.cat(embed_list, dim=0))
 
 
@@ -191,12 +189,16 @@ if cluster:
     kmeans = KMeans(n_clusters=4, random_state=0).fit(train_img_embeds[1])
     print(len(kmeans.labels_))
 
-
+print('saving clusters >> ')
 unique_labels = np.unique(kmeans.labels_)
 for l in unique_labels:
-	os.makedirs(DATASET_PATH+"_"+l)
-list_imgs  = sorted(glob(DATASET_PATH+'/*.png'))
+    try:
+        os.makedirs(os.path.join(DATASET_PATH+"\\_"+str(l)))
+    except:
+        continue 
+list_imgs  = sorted(glob(DATASET_PATH+'\\*.png'))
 for idx,im in enumerate(list_imgs):
         path_from=im
-        path_to=DATASET_PATH + '/_' + str(kmeans.labels_[idx]) +'/' + im.split('/')[-1]
+        path_to=DATASET_PATH + '\\_' + str(kmeans.labels_[idx]) +'\\' + im.split('\\')[-1]
+        print(path_from, path_to,idx)
         shutil.copyfile(path_from, path_to)

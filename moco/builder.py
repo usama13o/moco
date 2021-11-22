@@ -1,4 +1,6 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
+
+from main_moco import accuracy
 import torch
 import torch.nn as nn
 import pytorch_lightning as pl
@@ -207,11 +209,15 @@ class MoCo(pl.LightningModule):
         images,label = batch  #
         o,t= self.forward(images[0], images[1],label)
         loss = self.criterion(o,t)
-        return loss
+
+        acc1, acc5 = accuracy(o, t, topk=(1, 5))
+        return loss,(acc1,acc5)
 
     def training_step(self, batch, batch_idx):
-        loss = self._get_reconstruction_loss(batch)
+        loss,acc = self._get_reconstruction_loss(batch)
         self.log('train_loss', loss)
+        self.log('acc1', acc[0])
+        self.log('acc5', acc[1])
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -230,7 +236,7 @@ class MoCo(pl.LightningModule):
                                                          factor=0.2,
                                                          patience=20,
                                                          min_lr=5e-5)
-        return {"optimizer": optimizer, "lr_scheduler": scheduler, "monitor": "val_loss"}
+        return {"optimizer": optimizer, "lr_scheduler": scheduler, "monitor": "train_loss"}
 
 # utils
 @torch.no_grad()

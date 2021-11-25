@@ -24,7 +24,8 @@ class MoCo(pl.LightningModule):
         self.K = K
         self.m = m
         self.T = T
-
+        self.temperature = 0.0722
+        self.base_temperature = 0.0722
         # create the encoders
         # num_classes is the output fc dimension
         self.encoder_q = base_encoder(num_classes=dim)
@@ -156,7 +157,7 @@ class MoCo(pl.LightningModule):
         q = self.encoder_q(im_q)  # queries: NxC
         q = nn.functional.normalize(q, dim=1)
 
-        # compute key features
+      # compute key features
         with torch.no_grad():  # no gradient to keys
             self._momentum_update_key_encoder()  # update the key encoder
 
@@ -171,44 +172,60 @@ class MoCo(pl.LightningModule):
 
         # compute logits
         # Einstein sum is more intuitive
-        # positive logits: Nx1
-        l_pos = torch.einsum('nc,nc->n', [q, k]).unsqueeze(-1)
-        # negative logits: NxK
-        l_neg = torch.Tensor((q.shape[0]),self.queues[0].shape[1]).cuda()
-        for idx,n in enumerate(q):
-            te = n.unsqueeze(0)
-            idx_other = (label[idx]-1)%4
-            # print(label[idx],' to ',idx_other)
-            qq = self.queues[idx_other].clone().detach()
-            l_p= torch.einsum('nc,ck->nk',[te.cuda(),qq.cuda()]).cuda()
-            # print(l_p.shape)
-            l_neg[idx]=l_p
-            # print(l_neg.shape)
+        features  = torch.cat([q.unsqueeze(1),k.unsqueeze(1)],dim=1)
+        batch_size = features.shape[0]
+        labels = label.contiguous().view(-1, 1)
+        if labels.shape[0] != batch_size:
+            raise ValueError('Num of labels does not match num of features')
+        mask = torch.eq(labels, labels.T).float().cuda()
+        
+        contrast_count = features.shape[1]
+        contrast_feature = torch.cat(torch.unbind(features, dim=1), dim=0)
+        anchor_feature = contrast_feature
+        anchor_count = contrast_count
+        
+        # compute logits
+        anchor_dot_contrast = torch.div(
+            torch.matmul(anchor_feature, contrast_feature.T),
+            self.temperature)
+        # for numerical stability
+        logits_max, _ = torch.max(anchor_dot_contrast, dim=1, keepdim=True)
+        logits = anchor_dot_contrast - logits_max.detach()
 
-        # logits: Nx(1+K)
-        logits = torch.cat([l_pos, l_neg], dim=1)
+        # tile mask
+        mask = mask.repeat(anchor_count, contrast_count)
+        # mask-out self-contrast cases
+        logits_mask = torch.scatter(
+            torch.ones_like(mask),
+            1,
+            torch.arange(batch_size * anchor_count).view(-1, 1).cuda(),
+            0
+        )
+        mask = mask * logits_mask
 
-        # apply temperature
-        logits /= self.T
+        # compute log_prob
+        exp_logits = torch.exp(logits) * logits_mask
+        log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True))
 
-        # labels: positive key indicators
-        try:
-            labels = torch.zeros(logits.shape[0], dtype=torch.long).cuda()
-        except:
-            labels = torch.zeros(logits.shape[0], dtype=torch.long)
+        # compute mean of log-likelihood over positive
+        mean_log_prob_pos = (mask * log_prob).sum(1) / mask.sum(1)
+
+        # loss
+        loss = - (self.temperature / self.base_temperature) * mean_log_prob_pos
+        loss = loss.view(anchor_count, batch_size).mean()
 
         # dequeue and enqueue
-        self._dequeue_and_enqueue(k,label)
+        self._dequeue_and_enqueue(k, label)
 
-        return logits, labels
+        return loss ,logits,mask
 
     def _get_reconstruction_loss(self, batch):
         """
         Given a batch of images, this function returns the reconstruction loss (MSE in our case)
         """
         images,label = batch  #
-        o,t= self.forward(images[0], images[1],label)
-        loss = self.criterion(o,t)
+        loss,o,t= self.forward(images[0], images[1],label)
+        # loss = self.criterion(o,t)
 
         acc1, acc5 = accuracy(o, t, topk=(1, 5))
         return loss,(acc1,acc5)
@@ -228,7 +245,7 @@ class MoCo(pl.LightningModule):
         loss = self._get_reconstruction_loss(batch)
         self.log('test_loss', loss)
     def configure_optimizers(self):
-        optimizer = optim.Adam(self.parameters(), lr=1e-3)
+        optimizer = optim.SGD(self.parameters(), lr=1e-3)
         # Using a scheduler is optional but can be helpful.
         # The scheduler reduces the LR if the validation performance hasn't improved for the last N epochs
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer,

@@ -46,25 +46,11 @@ class MoCo(pl.LightningModule):
             param_k.requires_grad = False  # not update by gradient
 
         # create the queue
-        # Creating different queues for the clusters 
-        self.register_buffer("queue_1", torch.randn(dim, K))
-        self.queue_1 = nn.functional.normalize(self.queue_1, dim=0)
+        self.register_buffer("queue_1", torch.randn(K, dim))
+        self.queue_1 = nn.functional.normalize(self.queue_1, dim=1)
         self.register_buffer("queue_1_ptr", torch.zeros(1, dtype=torch.long))
-
-        self.register_buffer("queue_2", torch.randn(dim, K))
-        self.queue_2 = nn.functional.normalize(self.queue_2, dim=0)
-        self.register_buffer("queue_2_ptr", torch.zeros(1, dtype=torch.long))
-
-        self.register_buffer("queue_3", torch.randn(dim, K))
-        self.queue_3 = nn.functional.normalize(self.queue_3 ,dim=0)
-        self.register_buffer("queue_3_ptr", torch.zeros(1, dtype=torch.long))
-
-        self.register_buffer("queue_4", torch.randn(dim, K))
-        self.queue_4 = nn.functional.normalize(self.queue_4, dim=0)
-        self.register_buffer("queue_4_ptr", torch.zeros(1, dtype=torch.long))
-
-        self.queues = torch.stack([self.queue_1,self.queue_2,self.queue_3,self.queue_4],dim=0)
-        self.queues_ptr = torch.stack([self.queue_1_ptr,self.queue_2_ptr,self.queue_3_ptr,self.queue_4_ptr],dim=0)
+        self.register_buffer("queue_1_labels", torch.tensor([0,1,2,3],dtype=torch.long).repeat(K))
+        self.queue_1_labels = self.queue_1_labels[:K]
 
     @torch.no_grad()
     def _momentum_update_key_encoder(self):
@@ -77,22 +63,20 @@ class MoCo(pl.LightningModule):
     @torch.no_grad()
     def _dequeue_and_enqueue(self, keys,label):
         # gather keys before updating queue
-        # keys = concat_all_gather(keys)
-        for idx,k in enumerate(keys):
-            # print(self.queues[label[idx]][:,int(self.queues_ptr[label[idx]]):int(self.queues_ptr[label[idx]]) +1 ].shape,k.shape)
-            self.queues[label[idx]][:,int(self.queues_ptr[label[idx]])] = k.T
-            self.queues_ptr[label[idx]] = (self.queues_ptr[label[idx]] + 1) % self.K
-            # print(self.queues_ptr)
-        # queue = self.queues[label]
-        # queue_ptr = self.queues_ptr[label]
+        queue = self.queue_1
+        queue_ptr = self.queue_1_ptr
 
-        # batch_size = keys.shape[0]
+        batch_size = keys.shape[0]
 
-        # ptr = int(queue_ptr)
-        # assert self.K % batch_size == 0  # for simplicity
+        ptr = int(queue_ptr)
+        assert self.K % batch_size == 0  # for simplicity
 
-        # # replace the keys at ptr (dequeue and enqueue)
-        # queue[:, ptr:ptr + batch_size] = keys.T
+        # replace the keys at ptr (dequeue and enqueue)
+        queue[ ptr:ptr + batch_size,:] = keys
+        self.queue_1_labels[ptr:ptr + batch_size] =label
+        ptr = (ptr + batch_size) % self.K  # move pointer
+
+        queue_ptr[0] = ptr
         # ptr = (ptr + batch_size) % self.K  # move pointer
 
         # queue_ptr[0] = ptr
@@ -170,19 +154,21 @@ class MoCo(pl.LightningModule):
             # undo shuffle
             # k = self._batch_unshuffle_ddp(k, idx_unshuffle)
 
-        # compute logits
+         # compute logits
         # Einstein sum is more intuitive
-        features  = torch.cat([q.unsqueeze(1),k.unsqueeze(1)],dim=1)
+        features  = torch.cat([q,k,self.queue_1],dim=0)
+        labels = torch.cat([label,label,self.queue_1_labels],dim=0)
         batch_size = features.shape[0]
-        labels = label.contiguous().view(-1, 1)
+        labels = labels.contiguous().view(-1, 1)
+        assert not 1 in torch.eq(labels, labels.T).float().sum(1)
         if labels.shape[0] != batch_size:
             raise ValueError('Num of labels does not match num of features')
         mask = torch.eq(labels, labels.T).float().cuda()
         
-        contrast_count = features.shape[1]
-        contrast_feature = torch.cat(torch.unbind(features, dim=1), dim=0)
-        anchor_feature = contrast_feature
+        contrast_count = labels.shape[0] # number of views (2)
+        contrast_feature = features
         anchor_count = contrast_count
+        anchor_feature =     contrast_feature
         
         # compute logits
         anchor_dot_contrast = torch.div(
@@ -192,13 +178,13 @@ class MoCo(pl.LightningModule):
         logits_max, _ = torch.max(anchor_dot_contrast, dim=1, keepdim=True)
         logits = anchor_dot_contrast - logits_max.detach()
 
-        # tile mask
-        mask = mask.repeat(anchor_count, contrast_count)
-        # mask-out self-contrast cases
+        # tile mask should have same shape as contrast feature shape[0]
+        # mask = mask.repeat(anchor_count, contrast_count)
+        # mask-out self-contrast cases``
         logits_mask = torch.scatter(
             torch.ones_like(mask),
             1,
-            torch.arange(batch_size * anchor_count).view(-1, 1).cuda(),
+            torch.arange(anchor_count).view(-1, 1).cuda(),
             0
         )
         mask = mask * logits_mask
@@ -212,7 +198,8 @@ class MoCo(pl.LightningModule):
 
         # loss
         loss = - (self.temperature / self.base_temperature) * mean_log_prob_pos
-        loss = loss.view(anchor_count, batch_size).mean()
+        loss = loss.mean()
+        assert not torch.isnan(loss), "loss should not be NaN"
 
         # dequeue and enqueue
         self._dequeue_and_enqueue(k, label)

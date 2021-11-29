@@ -186,7 +186,7 @@ if cluster:
 
     from sklearn.cluster import KMeans
 
-    kmeans = KMeans(n_clusters=4, random_state=0).fit(train_img_embeds[1])
+    kmeans = KMeans(n_clusters=3, random_state=0).fit(train_img_embeds[1])
     print(len(kmeans.labels_))
 
 print('saving clusters >> ')
@@ -199,6 +199,9 @@ for l in unique_labels:
 list_imgs  = sorted(glob(DATASET_PATH+'\\*.png'))
 for idx,im in enumerate(list_imgs):
         path_from=im
-        path_to=DATASET_PATH + '\\_' + str(kmeans.labels_[idx]) +'\\' + im.split('\\')[-1]
-        print(path_from, path_to,idx)
-        shutil.copyfile(path_from, path_to)
+        try:
+            path_to=DATASET_PATH + '\\_' + str(kmeans.labels_[idx]) +'\\' + im.split('\\')[-1]
+            print(path_from, path_to,idx)
+            shutil.copyfile(path_from, path_to)
+        except:
+            continue 

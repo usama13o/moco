@@ -11,7 +11,7 @@ class MoCo(pl.LightningModule):
     Build a MoCo model with: a query encoder, a key encoder, and a queue
     https://arxiv.org/abs/1911.05722
     """
-    def __init__(self, base_encoder,criterion, dim=128, K=65536, m=0.999, T=0.07, mlp=False):
+    def __init__(self, base_encoder,criterion, dim=128, K=65536, m=0.999, T=0.07, mlp=False,steps_per_epoch=1):
         """
         dim: feature dimension (default: 128)
         K: queue size; number of negative keys (default: 65536)
@@ -26,6 +26,8 @@ class MoCo(pl.LightningModule):
         self.T = T
         self.temperature = 0.0722
         self.base_temperature = 0.0722
+        self.contrast_mode = 'all'
+        self.steps_per_epoch= steps_per_epoch 
         # create the encoders
         # num_classes is the output fc dimension
         self.encoder_q = base_encoder(num_classes=dim)
@@ -73,7 +75,7 @@ class MoCo(pl.LightningModule):
 
         # replace the keys at ptr (dequeue and enqueue)
         queue[ ptr:ptr + batch_size,:] = keys
-        self.queue_1_labels[ptr:ptr + batch_size] =label
+        self.queue_1_labels[ptr:ptr + batch_size] =label[:keys.shape[0]]
         ptr = (ptr + batch_size) % self.K  # move pointer
 
         queue_ptr[0] = ptr
@@ -155,21 +157,25 @@ class MoCo(pl.LightningModule):
             # k = self._batch_unshuffle_ddp(k, idx_unshuffle)
 
          # compute logits
-        # Einstein sum is more intuitive
-        features  = torch.cat([q,k,self.queue_1],dim=0)
-        labels = torch.cat([label,label,self.queue_1_labels],dim=0)
-        batch_size = features.shape[0]
-        labels = labels.contiguous().view(-1, 1)
-        assert not 1 in torch.eq(labels, labels.T).float().sum(1)
-        if labels.shape[0] != batch_size:
-            raise ValueError('Num of labels does not match num of features')
-        mask = torch.eq(labels, labels.T).float().cuda()
+        features = torch.cat([q,k,self.queue_1],dim=0)
+        device = (torch.device('cuda')
+                  if features.is_cuda
+                  else torch.device('cpu'))
         
-        contrast_count = labels.shape[0] # number of views (2)
+        batch_size = q.shape[0]
+        label = torch.cat([label,label,self.queue_1_labels],dim=0)
+        labels = label.contiguous().view(-1, 1)
+        mask = torch.eq(labels, labels.T).float().to(device)
+
+        contrast_count = features.shape[0]
         contrast_feature = features
-        anchor_count = contrast_count
-        anchor_feature =     contrast_feature
-        
+        if self.contrast_mode == 'one':
+            anchor_feature = features[:, 0]
+            anchor_count = 1
+        elif self.contrast_mode == 'all':
+            anchor_feature = contrast_feature
+            anchor_count = contrast_count
+
         # compute logits
         anchor_dot_contrast = torch.div(
             torch.matmul(anchor_feature, contrast_feature.T),
@@ -178,13 +184,13 @@ class MoCo(pl.LightningModule):
         logits_max, _ = torch.max(anchor_dot_contrast, dim=1, keepdim=True)
         logits = anchor_dot_contrast - logits_max.detach()
 
-        # tile mask should have same shape as contrast feature shape[0]
+        # tile mask
         # mask = mask.repeat(anchor_count, contrast_count)
-        # mask-out self-contrast cases``
+        # mask-out self-contrast cases
         logits_mask = torch.scatter(
             torch.ones_like(mask),
             1,
-            torch.arange(anchor_count).view(-1, 1).cuda(),
+            torch.arange(anchor_count).view(-1, 1).to(device),
             0
         )
         mask = mask * logits_mask
@@ -198,8 +204,7 @@ class MoCo(pl.LightningModule):
 
         # loss
         loss = - (self.temperature / self.base_temperature) * mean_log_prob_pos
-        loss = loss.mean()
-        assert not torch.isnan(loss), "loss should not be NaN"
+        loss = loss.view(anchor_count).mean()
 
         # dequeue and enqueue
         self._dequeue_and_enqueue(k, label)
@@ -235,12 +240,9 @@ class MoCo(pl.LightningModule):
         optimizer = optim.SGD(self.parameters(), lr=1e-3)
         # Using a scheduler is optional but can be helpful.
         # The scheduler reduces the LR if the validation performance hasn't improved for the last N epochs
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer,
-                                                         mode='min',
-                                                         factor=0.2,
-                                                         patience=20,
-                                                         min_lr=5e-5)
-        return {"optimizer": optimizer, "lr_scheduler": scheduler, "monitor": "train_loss"}
+        scheduler = optim.lr_scheduler.OneCycleLR(optimizer,max_lr=0.05,steps_per_epoch=self.steps_per_epoch,epochs=self.trainer.max_epochs,div_factor=100)
+        scheduler = {'scheduler':scheduler,'interval':'step','monitor':'val_loss'}
+        return [optimizer] , [scheduler]
 
 # utils
 @torch.no_grad()

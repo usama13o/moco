@@ -164,10 +164,67 @@ def main_worker(gpu, ngpus_per_node, args):
     except :
         criterion = nn.CrossEntropyLoss()
 
+
+    # Data loading code
+    traindir = os.path.join(args.data, 'train')
+    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                     std=[0.229, 0.224, 0.225])
+    if args.aug_plus:
+        # MoCo v2's aug: similar to SimCLR https://arxiv.org/abs/2002.05709
+        augmentation = [
+            transforms.RandomResizedCrop(224, scale=(0.2, 1.)),
+            transforms.RandomApply([
+                transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)  # not strengthened
+            ], p=0.8),
+            transforms.RandomGrayscale(p=0.2),
+            transforms.RandomApply([moco.loader.GaussianBlur([.1, 2.])], p=0.5),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            normalize
+        ]
+    else:
+        # MoCo v1's aug: the same as InstDisc https://arxiv.org/abs/1805.01978
+        augmentation = [
+            transforms.RandomResizedCrop(224, scale=(0.2, 1.)),
+            # transforms.Resize(224),
+            # transforms.RandomGrayscale(p=0.2),
+            # transforms.ColorJitter(0.4, 0.4, 0.4, 0.4),
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomVerticalFlip(),
+            transforms.RandomRotation(15),
+            transforms.ToTensor(),
+            # normalize
+        ]
+
+#Run AutoEncoder
+    '''
+    Cluster images and save them into seperate folders. The data loader will load them as seperate classes 
+    TODO maybe make more 'on the fly' by passing the kmeans fitted func to the dataset loader ? 
+    '''
+    if not(os.path.exists(os.path.join(traindir,'cls2\\_0'))):
+        import emb
+    else:
+        print('clustering already Done !')
+    
+    traindir = os.path.join(args.data, 'train\\cls2')
+
+    train_dataset = datasets.ImageFolder(
+        traindir,
+        moco.loader.TwoCropsTransform(transforms.Compose(augmentation)))
+
+    if args.distributed:
+        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
+    else:
+        train_sampler = None
+
+    train_loader = torch.utils.data.DataLoader(
+        train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
+        num_workers=args.workers, pin_memory=True, sampler=train_sampler, drop_last=True)
+
     print("=> creating model '{}'".format(args.arch))
     swin =  SwinTransformer
     model =  moco.builder.MoCo(swin,criterion,
-        args.moco_dim, args.moco_k, args.moco_m, args.moco_t, args.mlp)
+        args.moco_dim, args.moco_k, args.moco_m, args.moco_t, mlp = args.mlp,steps_per_epoch = len(train_loader))
     print(model)
 
     if args.distributed:
@@ -228,62 +285,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     cudnn.benchmark = True
 
-    # Data loading code
-    traindir = os.path.join(args.data, 'train')
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
-    if args.aug_plus:
-        # MoCo v2's aug: similar to SimCLR https://arxiv.org/abs/2002.05709
-        augmentation = [
-            transforms.RandomResizedCrop(224, scale=(0.2, 1.)),
-            transforms.RandomApply([
-                transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)  # not strengthened
-            ], p=0.8),
-            transforms.RandomGrayscale(p=0.2),
-            transforms.RandomApply([moco.loader.GaussianBlur([.1, 2.])], p=0.5),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            normalize
-        ]
-    else:
-        # MoCo v1's aug: the same as InstDisc https://arxiv.org/abs/1805.01978
-        augmentation = [
-            transforms.RandomResizedCrop(224, scale=(0.2, 1.)),
-            # transforms.Resize(224),
-            # transforms.RandomGrayscale(p=0.2),
-            # transforms.ColorJitter(0.4, 0.4, 0.4, 0.4),
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomVerticalFlip(),
-            transforms.RandomRotation(15),
-            transforms.ToTensor(),
-            # normalize
-        ]
-
-    #Run AutoEncoder
-    '''
-    Cluster images and save them into seperate folders. The data loader will load them as seperate classes 
-    TODO maybe make more 'on the fly' by passing the kmeans fitted func to the dataset loader ? 
-    '''
-    if not(os.path.exists(os.path.join(traindir,'cls2\\_0'))):
-        import emb
-    else:
-        print('clustering already Done !')
     
-    traindir = os.path.join(args.data, 'train\\cls2')
-
-    train_dataset = datasets.ImageFolder(
-        traindir,
-        moco.loader.TwoCropsTransform(transforms.Compose(augmentation)))
-
-    if args.distributed:
-        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
-    else:
-        train_sampler = None
-
-    train_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
-        num_workers=args.workers, pin_memory=True, sampler=train_sampler, drop_last=True)
-
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
